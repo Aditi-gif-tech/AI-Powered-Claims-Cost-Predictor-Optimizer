@@ -3,16 +3,40 @@ import streamlit as st
 import plotly.express as px
 from azure.ai.openai import OpenAIClient
 from azure.core.credentials import AzureKeyCredential
-st.title("AI-Powered Claims Cost Predictor & Optimizer")
 
-# Fetch OpenAI API keys and endpoint from secrets.toml
-openai_api_key = st.secrets["api_key"]
-openai_api_base = st.secrets["azure_endpoint"]
+# ---------- Azure OpenAI Helper Functions ----------
 
-# Azure OpenAI client setup
-client = OpenAIClient(endpoint=openai_api_base, credential=AzureKeyCredential(openai_api_key))
+def generate_forecast_prompt(df, metric, forecast_period):
+    prompt = f"Forecast the {metric} for the next {forecast_period} months based on the dataset provided:\n\n{df.to_string(index=False)}"
+    return prompt
 
-# Load data from DBFS path or mock data for testing
+def forecast_data_with_ai(df, metric, forecast_period):
+    try:
+        prompt = generate_forecast_prompt(df, metric, forecast_period)
+        response = client.completions.create(
+            model="gpt-4",  # Replace with your Azure deployment model name
+            prompt=prompt,
+            max_tokens=1000
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        st.error(f"Error generating forecast: {e}")
+        return None
+
+def custom_analysis_with_ai(custom_query):
+    try:
+        response = client.completions.create(
+            model="gpt-4",  # Replace with your Azure deployment model name
+            prompt=custom_query,
+            max_tokens=1000
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        st.error(f"Error with custom analysis AI: {e}")
+        return None
+
+# ---------- Load Data ----------
+
 def load_data():
     try:
         data = {
@@ -29,16 +53,21 @@ def load_data():
         st.error(f"Error loading data: {e}")
         return pd.DataFrame()
 
-df = load_data()
+# ---------- Azure API Credentials ----------
+openai_api_key = st.secrets["api_key"]
+openai_api_base = st.secrets["azure_endpoint"]
+client = OpenAIClient(endpoint=openai_api_base, credential=AzureKeyCredential(openai_api_key))
 
-# Streamlit Interface
-st.title("AI-Powered Healthcare Predictions")
+# ---------- Streamlit App ----------
+st.title("AI-Powered Claims Cost Predictor & Optimizer")
+
+df = load_data()
 
 # Sidebar Navigation
 sidebar_options = ["Select Analysis Type", "Ask Healthcare Predictions"]
 sidebar_selection = st.sidebar.selectbox("Select an option", sidebar_options)
 
-# Analysis Type Section
+# Analysis Section
 if sidebar_selection == "Select Analysis Type":
     prediction_type = st.sidebar.selectbox("Select an AI-powered Prediction Type", [
         "Total Cost Over Time",
@@ -76,7 +105,7 @@ if sidebar_selection == "Select Analysis Type":
 
         elif prediction_type == "Diagnosis Cost Trend Over Time":
             top_diagnoses = df["diagnosis_1_code_description"].value_counts().nlargest(5).index
-            df_filtered = df[df["diagnosis_1_code_description"].isin(top_diagnoses)]
+            df_filtered = df[df["diagnosis_1_code_description"].isin(top_diagnoses)].copy()
             df_filtered["month"] = df_filtered["service_from_date"].dt.to_period("M")
             df_grouped = df_filtered.groupby(["month", "diagnosis_1_code_description"])["paid_amount"].sum().reset_index()
             df_grouped["month"] = df_grouped["month"].astype(str)
@@ -88,7 +117,7 @@ if sidebar_selection == "Select Analysis Type":
             fig = px.bar(df_grouped, x="employee_id", y="paid_amount", title="Top 20 Employees by Total Cost")
             st.plotly_chart(fig)
 
-# AI-Powered Prediction Section
+# AI Analysis Section
 elif sidebar_selection == "Ask Healthcare Predictions":
     st.subheader("Ask Healthcare Predictions")
     prediction_option = st.selectbox("Select an AI-powered Prediction Type", ["Forecast Data using AI", "Custom Analysis with AI"])
@@ -98,55 +127,23 @@ elif sidebar_selection == "Ask Healthcare Predictions":
         forecast_period = st.number_input("Forecast Period (months)", min_value=1, max_value=12, value=3)
 
         if not df.empty:
-            st.write(df.head())
+            st.write("Sample Data:", df.head())
             if st.button("Generate Forecast"):
-                try:
-                    forecast_result = forecast_data_with_ai(df, metric, forecast_period)
-                    if forecast_result:
-                        st.write("AI Forecast Result:", forecast_result)
-                    else:
-                        st.error("Failed to generate forecast.")
-                except Exception as e:
-                    st.error(f"Error generating forecast: {e}")
+                forecast_result = forecast_data_with_ai(df, metric, forecast_period)
+                if forecast_result:
+                    st.success("AI Forecast Result:")
+                    st.write(forecast_result)
+                else:
+                    st.error("Failed to generate forecast.")
 
     elif prediction_option == "Custom Analysis with AI":
         user_query = st.text_area("Enter Custom Analysis Query")
 
         if st.button("Ask AI") and user_query:
             with st.spinner("Thinking..."):
-                try:
-                    analysis_result = custom_analysis_with_ai(user_query)
+                analysis_result = custom_analysis_with_ai(user_query)
+                if analysis_result:
                     st.success("AI Response:")
                     st.write(analysis_result)
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-# Functions for AI Forecasting
-def generate_forecast_prompt(df, metric, forecast_period):
-    prompt = f"Forecast the {metric} for the next {forecast_period} months based on the dataset provided."
-    return prompt
-
-def forecast_data_with_ai(df, metric, forecast_period):
-    try:
-        prompt = generate_forecast_prompt(df, metric, forecast_period)
-        response = client.get_completions(
-            deployment_id="gpt-4",  # Replace with your Azure GPT deployment ID
-            prompt=prompt,
-            max_tokens=1000
-        )
-        return response.choices[0].text
-    except Exception as e:
-        st.error(f"Error generating forecast: {e}")
-        return None
-
-def custom_analysis_with_ai(custom_query):
-    try:
-        response = client.get_completions(
-            deployment_id="gpt-4",  # Replace with your Azure GPT deployment ID
-            prompt=custom_query,
-            max_tokens=1000
-        )
-        return response.choices[0].text
-    except Exception as e:
-        st.error(f"Error with custom analysis AI: {e}")
-        return None
+                else:
+                    st.error("Failed to get response.")
